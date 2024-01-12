@@ -1,3 +1,4 @@
+#!/bin/bash
 set -ex
 source "$SCRIPT_HELPERS_DIR/setup_pytorch_env.sh"
 
