@@ -1,6 +1,6 @@
 #!/bin/bash
 set -ex
-export PATH="C:/Program Files/CMake/bin;C:/Program Files/7-Zip;C:/ProgramData/chocolatey/bin;C:/Program Files/Git/cmd;C:/Program Files/Amazon/AWSCLI;C:/Program Files/Amazon/AWSCLI/bin;$PATH"
+export PATH="/c/Program Files/CMake/bin;/c/Program Files/7-Zip;/c/ProgramData/chocolatey/bin;/c/Program Files/Git/cmd;/c/Program Files/Amazon/AWSCLI;/c/Program Files/Amazon/AWSCLI/bin;$PATH"
 
 # Install Miniconda3
 export INSTALLER_DIR="$SCRIPT_HELPERS_DIR"/installation-helpers
@@ -19,9 +19,9 @@ cp -r "$CONDA_PARENT_DIR/Miniconda3/Lib/site-packages/torch" "$TMP_DIR_WIN/build
 
 pushd .
 if [[ -z "$VC_VERSION" ]]; then
-    "C:/Program Files (x86)/Microsoft Visual Studio/$VC_YEAR/$VC_PRODUCT/VC/Auxiliary/Build/vcvarsall.bat" x64
+    "/c/Program Files (x86)/Microsoft Visual Studio/$VC_YEAR/$VC_PRODUCT/VC/Auxiliary/Build/vcvarsall.bat" x64
 else
-    "C:/Program Files (x86)/Microsoft Visual Studio/$VC_YEAR/$VC_PRODUCT/VC/Auxiliary/Build/vcvarsall.bat" x64 -vcvars_ver=%VC_VERSION%
+    "/c/Program Files (x86)/Microsoft Visual Studio/$VC_YEAR/$VC_PRODUCT/VC/Auxiliary/Build/vcvarsall.bat" x64 -vcvars_ver=%VC_VERSION%
 fi
 popd
 
@@ -29,7 +29,7 @@ export DISTUTILS_USE_SDK=1
 
 
 if [[ "${USE_CUDA}" == "1" ]]; then
-    export CUDA_PATH="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v$CUDA_VERSION"
+    export CUDA_PATH="/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v$CUDA_VERSION"
 
     # version transformer, for example 10.1 to 10_1.
     export VERSION_SUFFIX=${CUDA_VERSION// /.}
@@ -39,7 +39,7 @@ if [[ "${USE_CUDA}" == "1" ]]; then
     export CUDNN_LIB_DIR=$CUDA_PATH/lib/x64
     export CUDA_TOOLKIT_ROOT_DIR=$CUDA_PATH
     export CUDNN_ROOT_DIR=$CUDA_PATH
-    export NVTOOLSEXT_PATH="C:/Program Files/NVIDIA Corporation/NvToolsExt"
+    export NVTOOLSEXT_PATH="/c/Program Files/NVIDIA Corporation/NvToolsExt"
     export PATH="$CUDA_PATH/bin;$CUDA_PATH/libnvvp;$PATH"
     export NUMBAPRO_CUDALIB=$CUDA_PATH/bin
     export NUMBAPRO_LIBDEVICE=$CUDA_PATH/nvvm/libdevice
