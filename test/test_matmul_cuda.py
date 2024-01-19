@@ -38,7 +38,8 @@ from torch.testing._internal.common_utils import (
 _IS_SM8X = False
 if torch.cuda.is_available():
     _IS_SM8X = torch.cuda.get_device_capability(0)[0] == 8
-requires_fp8 = unittest.skipIf(torch.cuda.get_device_capability() < (9, 0), "FP8 is only supported on H100+")
+requires_fp8 = unittest.skipUnless(torch.cuda.is_available() and torch.cuda.get_device_capability() >= (9, 0),
+                                   "FP8 is only supported on H100+")
 
 # Protects against includes accidentally setting the default dtype
 assert torch.get_default_dtype() is torch.float32
