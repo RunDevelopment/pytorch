@@ -7,7 +7,7 @@ else
   export CONDA_PARENT_DIR=/c/Jenkins
 fi
 
-LINUX_TEMP_DIR_WIN=$(cygpath -u "${TEMP_DIR_WIN}")
+LINUX_TMP_DIR_WIN=$(cygpath -u "${TMP_DIR_WIN}")
 
 # Be conservative here when rolling out the new AMI with conda. This will try
 # to install conda as before if it couldn't find the conda installation. This
@@ -17,9 +17,9 @@ if [ ! -f "$CONDA_PARENT_DIR/Miniconda3" ]; then
 fi
 
 if [[ "$INSTALL_FRESH_CONDA" == "1" ]]; then
-  curl --retry 3 --retry-all-errors -k https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe --output "$LINUX_TEMP_DIR_WIN/Miniconda3-latest-Windows-x86_64.exe"
+  curl --retry 3 --retry-all-errors -k https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe --output "$LINUX_TMP_DIR_WIN/Miniconda3-latest-Windows-x86_64.exe"
 
-  "$LINUX_TEMP_DIR_WIN/Miniconda3-latest-Windows-x86_64.exe" /InstallationType=JustMe /RegisterPython=0 /S /AddToPath=0 /D=$CONDA_PARENT_DIR/Miniconda3
+  "$LINUX_TMP_DIR_WIN/Miniconda3-latest-Windows-x86_64.exe" /InstallationType=JustMe /RegisterPython=0 /S /AddToPath=0 /D=$CONDA_PARENT_DIR/Miniconda3
 fi
 
 # Activate conda so that we can use its commands, i.e. conda, python, pip
