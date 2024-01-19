@@ -4,7 +4,7 @@ if [[ "$BUILD_ENVIRONMENT" == "" ]]; then
   CONDA_PARENT_DIR=$(pwd)
   export CONDA_PARENT_DIR
 else
-  export CONDA_PARENT_DIR=C:/Jenkins
+  export CONDA_PARENT_DIR=/c/Jenkins
 fi
 
 LINUX_TEMP_DIR_WIN=$(cygpath -u "${TEMP_DIR_WIN}")
