@@ -70,7 +70,7 @@ from .code_context import code_context
 from .exc import CondOpArgsMismatchError, UserError, UserErrorType
 from .mutation_guard import install_generation_tagging_init
 from .types import CacheEntry, DynamoCallback
-from .utils import compile_times
+from .utils import compile_times, common_constant_types
 
 log = logging.getLogger(__name__)
 
@@ -796,6 +796,7 @@ class FlattenInputOutputSignature(torch.fx.interpreter.Transformer):
         m: torch.fx.GraphModule,
         flat_args: Tuple[Any],
         matched_input_elements_positions: List[int],
+        flat_results: List[Any],
         matched_output_elements_positions: List[int],
         example_fake_inputs: List[torch.Tensor],
         flat_args_dynamic_dims: List[Set[int]],
@@ -834,6 +835,7 @@ class FlattenInputOutputSignature(torch.fx.interpreter.Transformer):
             self.new_args.append(arg)
         self.old_args_gen = (self.new_args[i] for i in matched_input_elements_positions)
         self.matched_output_elements_positions = matched_output_elements_positions
+        self.flat_results = flat_results
 
     def placeholder(self, target, args, kwargs):
         arg = next(self.old_args_gen)
@@ -848,8 +850,15 @@ class FlattenInputOutputSignature(torch.fx.interpreter.Transformer):
     def output(self, target, args, kwargs):
         dynamo_result_flat = args[0]
         lookup = [*dynamo_result_flat, *self.new_args]
-        new_result_flat = [lookup[i] for i in self.matched_output_elements_positions]
-        return super().output(target, (new_result_flat,), {})
+        new_results_flat = []
+        for i in range(len(self.flat_results)):
+            if self.matched_output_elements_positions[i] is not None:
+                new_results_flat.append(lookup[self.matched_output_elements_positions[i]])
+            else:
+                const_val = self.flat_results[i]
+                assert isinstance(const_val, tuple(common_constant_types))
+                new_results_flat.append(const_val)
+        return super().output(target, (new_results_flat,), {})
 
     def run_node(self, n):
         self.current_node = n
@@ -938,17 +947,6 @@ def rewrite_signature(
 ):
     orig_args, orig_kwargs = pytree.tree_unflatten(flat_args, in_spec)
 
-    constant_types = [
-        int,
-        str,
-        bool,
-        float,
-        torch.memory_format,
-        torch.device,
-        torch.dtype,
-        torch.layout,
-    ]
-
     def check_user_input_output(flat_values, error_type):
         supported_types = [
             torch.Tensor,
@@ -956,9 +954,7 @@ def rewrite_signature(
             torch.SymFloat,
             torch.SymBool,
             torch._C.ScriptObject,
-        ]
-        if error_type == UserErrorType.INVALID_INPUT:
-            supported_types.extend(constant_types)
+        ] + list(common_constant_types)
 
         def is_supported_type(val):
             return isinstance(val, tuple(supported_types))
@@ -993,6 +989,8 @@ def rewrite_signature(
             dict_of_source_vals[id(val)] = i
 
         for i, val in enumerate(candidates):
+            if isinstance(val, tuple(common_constant_types)):
+                matched_elements_positions.append(None)
             if id(val) not in dict_of_source_vals:
                 raise AssertionError(
                     f"Unexpectedly found a {type(val)} in the {debug_type}.\n"
@@ -1016,6 +1014,7 @@ def rewrite_signature(
         graph,
         flat_args,
         matched_input_elements_positions,
+        flat_results_traced,
         matched_output_elements_positions,
         example_fake_inputs,
         flat_args_dynamic_dims,

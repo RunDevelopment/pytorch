@@ -2857,6 +2857,68 @@ def forward(self, l_q_, l_k_, l_v_):
     getitem = _scaled_dot_product_flash_attention[0];  _scaled_dot_product_flash_attention = None
     return (getitem,)""")
 
+    def test_primitive_constant_output(self):
+        def zoo(x, y):
+            return y * x
+
+        ep = torch.export.export(zoo, (torch.tensor(3), 5))
+        res = ep(torch.tensor(4), 5)
+        self.assertEqual(res, torch.tensor(20))
+
+        def bar(x, y):
+            return y * x, y
+
+        ep = torch.export.export(bar, (torch.tensor(3), 5))
+        res = ep(torch.tensor(4), 5)
+        self.assertEqual(res[0], torch.tensor(20))
+        self.assertEqual(res[1], 5)
+
+        with self.assertRaisesRegex(RuntimeError, "Expected input arg1 to be equal to 5, but got 20"):
+            res = ep(torch.tensor(4), 20)
+
+        def foo(x):
+            # return a constant of primitive type
+            y = 5
+            return y * x, y
+
+        ep = torch.export.export(foo, (torch.tensor(3),))
+        res = ep(torch.tensor(4))
+        self.assertEqual(res[0], torch.tensor(20))
+        self.assertEqual(res[1], 5)
+
+        def qux(x, y):
+            return y * x, y - 1
+
+        ep = torch.export.export(qux, (torch.tensor(3), 5))
+        res = ep(torch.tensor(4), 5)
+        self.assertEqual(res[0], torch.tensor(20))
+        self.assertEqual(res[1], 4)
+
+    def test_none_input_output(self):
+        def zoo(x, y):
+            return x * x
+
+        ep = torch.export.export(zoo, (torch.tensor(3), None))
+        res = ep(torch.tensor(4), None)
+        self.assertEqual(res, torch.tensor(16))
+
+        def bar(x, y):
+            return x * x, y
+
+        ep = torch.export.export(bar, (torch.tensor(3), None))
+        res = ep(torch.tensor(4), None)
+        self.assertEqual(res[0], torch.tensor(16))
+        self.assertEqual(res[1], None)
+
+        decomp = ep.run_decompositions()
+        res = decomp(torch.tensor(4), None)
+        self.assertEqual(res[0], torch.tensor(16))
+        self.assertEqual(res[1], None)
+
+        gm = decomp.module()
+        res = gm(torch.tensor(4), None)
+        self.assertEqual(res[0], torch.tensor(16))
+        self.assertEqual(res[1], None)
 
 @unittest.skipIf(not torchdynamo.is_dynamo_supported(), "dynamo doesn't support")
 class TestExportCustomClass(TorchTestCase):
