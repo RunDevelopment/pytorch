@@ -39,7 +39,7 @@ if [[ "${USE_CUDA}" == "1" ]]; then
     export CUDNN_LIB_DIR=$CUDA_PATH/lib/x64
     export CUDA_TOOLKIT_ROOT_DIR=$CUDA_PATH
     export CUDNN_ROOT_DIR=$CUDA_PATH
-    export NVTOOLSEXT_PATH=C:/Program Files/NVIDIA Corporation/NvToolsExt
+    export NVTOOLSEXT_PATH="C:/Program Files/NVIDIA Corporation/NvToolsExt"
     export PATH="$CUDA_PATH/bin;$CUDA_PATH/libnvvp;$PATH"
     export NUMBAPRO_CUDALIB=$CUDA_PATH/bin
     export NUMBAPRO_LIBDEVICE=$CUDA_PATH/nvvm/libdevice
