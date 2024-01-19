@@ -408,3 +408,10 @@ class ExportGraphSignature:
             if isinstance(o.arg, TensorArgument):
                 if o.arg.name == old:
                     o.arg.name = new
+
+    def get_replace_hook(self):
+        def _(old, new, user):
+            if user.op == "output":
+                self.replace_all_uses(old.name, new)
+
+        return _
