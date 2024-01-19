@@ -271,12 +271,11 @@ test_dynamo_shard() {
   # PLEASE DO NOT ADD ADDITIONAL EXCLUDES HERE.
   # Instead, use @skipIfTorchDynamo on your tests.
   time python test/run_test.py --dynamo \
+    --exclude-inductor-tests \
     --exclude-jit-executor \
     --exclude-distributed-tests \
     --exclude \
       test_jit \
-      test_python_dispatch \
-      test_custom_ops \
     --shard "$1" "$NUM_TEST_SHARDS" \
     --verbose
   assert_git_not_dirty
