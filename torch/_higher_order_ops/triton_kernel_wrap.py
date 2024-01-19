@@ -1,6 +1,8 @@
-import ast
 import dataclasses
+import inspect
+import logging
 import threading
+from types import FunctionType
 from typing import Any, Dict
 
 import torch.utils._pytree as pytree
@@ -14,6 +16,9 @@ from torch.fx.experimental.proxy_tensor import (
     ProxyTorchDispatchMode,
     track_tensor_tree,
 )
+from torch.utils._triton import has_triton
+
+log = logging.getLogger("torch._dynamo")
 
 
 ###############################################################################
@@ -60,89 +65,155 @@ kernel_side_table = KernelSideTable()
 # Mutation Tracker
 
 
+class IdentifyMutationException(Exception):
+    pass
+
+
 @dataclasses.dataclass
-class MutationInfo:
+class Proxy:
     mutated: bool = False
-    used_in_unknown: bool = False
+
+    def __add__(self, o):
+        if isinstance(o, Proxy):
+            raise IdentifyMutationException("Proxy operation with Proxy")
+        return self
 
 
-# Super basic mutation tracking pass that tracks which inputs are used in stores
-# It bails if any of the inputs are used in non tl.load/tl.store positions.
-# This pass will miss simple things like
-# a = in_ptr
-# tl.load(a, ...)
-# since it does not do any contextual analysis. This means that we might incorrectly
-# find extra mutations but this is safe as it would only be incorrect to miss
-# mutations.
-class MutationTracker(ast.NodeVisitor):
-    ALLOWED_READ_FNS = {
-        "load",
-        "max_constancy",
-        "max_contiguous",
-        "multiple_of",
-        "static_print",
-        "static_assert",
-        "device_print",
-        "device_assert",
-    }
+class Scalar:
+    @staticmethod
+    def check(o):
+        if isinstance(o, Proxy):
+            raise IdentifyMutationException("Proxy operation with Scalar")
 
-    def __init__(self, infos) -> None:
-        super().__init__()
-        self.infos = infos
-        self.read_depth = 0
-        self.in_store = False
+    def __radd__(self, o):
+        if isinstance(o, Proxy):
+            return o
+        return self
 
-    def visit_Name(self, node):
-        if node.id not in self.infos:
-            return
-        if self.read_depth:
-            pass
-        elif self.in_store:
-            self.infos[node.id].mutated = True
-        else:
-            self.infos[node.id].used_in_unknown = True
-
-    def visit_Call(self, node):
-        # TODO(oulgen): Here we assume that there exists a line called
-        # from triton import language as tl. This needs to be checked
-        # as if someones imports xyz as tl then we will incorrectly
-        # assume a mutation but this would be ok as it is only unsafe to
-        # miss a mutation.
-        if (
-            isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "tl"
-        ):
-            if node.func.attr == "store":
-                # Do not allow for store to appear inside a read
-                # tl.load(a if tl.store(b) else z) is not useful
-                # and allowing this would complicate the analysis
-                assert self.read_depth == 0
-                assert self.in_store is False
-                self.in_store = True
-                self.generic_visit(node)
-                self.in_store = False
-                return
-            if node.func.attr in self.ALLOWED_READ_FNS:
-                self.read_depth += 1
-                self.generic_visit(node)
-                self.read_depth -= 1
-                return
-        self.generic_visit(node)
+    def __bool__(self):
+        raise IdentifyMutationException("Casting to bool is not allowed")
 
 
-def filter_non_mutated(kernel, tensors):
+# This operation is only needed when triton is available
+if has_triton():
+    import triton
+
+    def replacement_fn(self, *args, **kwargs):
+        if len(args) > 0:
+            Scalar.check(args[0])
+        return self
+
+    for name, _ in inspect.getmembers(triton.language.core.tensor, inspect.isfunction):
+        if name in ["__init__", "__radd__", "__bool__"]:
+            continue
+
+        setattr(Scalar, name, replacement_fn)
+
+
+# Given a triton kernel and the arguments for this kernel, this function traces
+# through the triton kernel and identifies which input pointers are mutated.
+# Tracing is done by replacing the input pointers with Proxy objects that
+# track mutation. Each triton language function is monkey patched to
+# either detect the mutation or return a fresh scalar object.
+def identify_mutated_tensors(kernel, kwargs):
+    from triton import language as tl
     from triton.runtime.autotuner import Autotuner
 
+    # Replace tensor pointers with Proxy object. Do not replace the other
+    # inputs since tl.constexprs can be inspected by the kernel.
+    proxy_kwargs = {
+        key: (Proxy() if isinstance(value, Tensor) else value)
+        for key, value in kwargs.items()
+    }
+
     if isinstance(kernel, Autotuner):
+        if len(kernel.configs) > 0:
+            # If we are autotuning, then it doesn't matter which version gets
+            # picked for tracing purposes, so lets pick the first one
+            proxy_kwargs = {**proxy_kwargs, **kernel.configs[0].kwargs}
         kernel = kernel.fn
 
-    infos = {name: MutationInfo() for name in tensors}
-    tracker = MutationTracker(infos)
-    tracker.visit(kernel.parse())
-    return [
-        name for name, info in infos.items() if info.mutated or info.used_in_unknown
-    ]
+    default_impls: Dict[str, FunctionType] = {}
+    mutation_ops = {
+        "store",
+        "atomic_add",
+        "atomic_cas",
+        "atomic_max",
+        "atomic_min",
+        "atomic_xchg",
+    }
+    try:
+        # Monkey patch all triton language functions
+        for name, impl in inspect.getmembers(tl, inspect.isfunction):
+            default_impls[name] = impl
+
+            if name in mutation_ops:
+                # Ops that mutate the first argument tensor pointer
+
+                def fn(pointer, *args, **kwargs):
+                    assert isinstance(pointer, Proxy)
+                    pointer.mutated = True
+                    return Scalar()
+
+            elif name == "make_block_ptr":
+                # Creates indirection to base tensor pointer
+
+                def fn(base, *args, **kwargs):  # type: ignore[misc] # different conditional signatures
+                    assert isinstance(base, Proxy)
+                    return base
+
+            elif name == "inline_asm_elementwise":
+                # If there's inline asm in the kernel, anything can happen.
+                # Do not optimize
+
+                def fn(*args, **kwargs):  # type: ignore[misc] # different conditional signatures
+                    raise IdentifyMutationException("inline_asm_elementwise in kernel")
+
+            else:
+                # Any operation not listed above, do not mutate a kernel
+                # pointer. They either return some sort of scalar or
+                # for the purposes of tracing cause an uninteresting
+                # side effect.
+
+                def fn(*args, **kwargs):  # type: ignore[misc] # different conditional signatures
+                    return Scalar()
+
+            setattr(tl, name, fn)
+
+        kernel.fn(**proxy_kwargs)
+        return [
+            key
+            for key, value in proxy_kwargs.items()
+            if isinstance(value, Proxy) and value.mutated
+        ]
+    except (AttributeError, IdentifyMutationException, RuntimeError, ValueError) as e:
+        # - AttributeError: Triton converts constexpr to special objects
+        #   TODO(oulgen): we also need to wrap them appropriately
+        #
+        # - IdentifyMutationException: An indication for us to not optimize
+        #
+        # - RuntimeError: Throw when the kernel calls another @triton.jit kernel
+        #   "Cannot call @triton.jit'd outside of the scope of a kernel"
+        #   TODO(oulgen): Find a way to monkey patch @triton.jit away
+        #
+        # - ValueError: If triton language function are imported ahead of time,
+        #   we are no longer able to monkey patch them, so the execution throws
+        #   "Did you forget to add @triton.jit ?"
+        #   TODO(oulgen): Find a way to monkey patch this
+        import traceback
+
+        log.debug(
+            "Encountered an exception in identify_mutated_tensors, assuming every input is mutated"
+        )
+        log.debug(
+            "".join(
+                traceback.TracebackException.from_exception(e).format()  # noqa: G001
+            )
+        )
+        return [key for key, value in proxy_kwargs.items() if isinstance(value, Proxy)]
+    finally:
+        for name, impl in default_impls.items():
+            setattr(tl, name, impl)
 
 
 ###############################################################################
@@ -226,15 +297,12 @@ def triton_kernel_wrapper_mutation_proxy_torch_dispatch_mode(
 @triton_kernel_wrapper_mutation.py_functionalize_impl
 def triton_kernel_wrapper_mutation_functionalize(ctx, kernel_idx, grid, kwargs):
     unwrapped_kwargs = ctx.unwrap_tensors(kwargs)
-    tensors_to_clone = [
-        key for key, value in unwrapped_kwargs.items() if isinstance(value, Tensor)
-    ]
     kernel = kernel_side_table.get_kernel(kernel_idx)
     # TODO(oulgen): Preexisting bug, if two kernel inputs are views of each
     # other, and one gets mutated in kernel, and later another gets mutated,
     # they are no longer equal. Fix this by graph breaking on this condition
     # earlier in dynamo.
-    tensors_to_clone = filter_non_mutated(kernel, tensors_to_clone)
+    tensors_to_clone = identify_mutated_tensors(kernel, unwrapped_kwargs)
     with ctx.redispatch_to_next():
         unwrapped_outputs = triton_kernel_wrapper_functional(
             kernel_idx=kernel_idx,
