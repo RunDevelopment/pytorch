@@ -7,7 +7,8 @@ export INSTALLER_DIR="$SCRIPT_HELPERS_DIR"/installation-helpers
 
 # Miniconda has been installed as part of the Windows AMI with all the dependencies.
 # We just need to activate it here
-"$INSTALLER_DIR"/activate_miniconda3.bat
+# shellcheck disable=SC1091
+source "$INSTALLER_DIR"/activate_miniconda3.sh
 
 # PyTorch is now installed using the standard wheel on Windows into the conda environment.
 # However, the test scripts are still frequently referring to the workspace temp directory
