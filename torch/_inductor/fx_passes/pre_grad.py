@@ -1,5 +1,6 @@
 import copy
 import logging
+import traceback
 from typing import List, Optional
 
 import torch
@@ -25,6 +26,7 @@ from ..pattern_matcher import (
 from ..utils import is_cpu_device
 from .group_batch_fusion import group_batch_fusion_passes
 from .misc_patterns import numpy_compat_normalization
+from .numeric_utils import numeric_check_if_enabled, run_model
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +71,8 @@ def pre_grad_passes(gm: torch.fx.GraphModule, example_inputs):
 
     if config.pattern_matcher:
         lazy_init()
+        if config.fx_passes_numeric_check["pre_fx_passes"]:
+            gm_before_fx_passes = gm.__copy__()
         # explicitly run with predispatch atenIR based passes
         if config.is_predispatch:
             group_batch_fusion_passes(gm.graph, pre_grad=True)
@@ -91,6 +95,16 @@ def pre_grad_passes(gm: torch.fx.GraphModule, example_inputs):
     stable_topological_sort(gm.graph)
     gm.graph.lint()
     gm.recompile()
+
+    if config.pattern_matcher and config.fx_passes_numeric_check["pre_fx_passes"]:
+        gm_after_fx_passes = gm.__copy__()
+        numeric_check_if_enabled(
+            gm_before_fx_passes,
+            gm_after_fx_passes,
+            example_inputs,
+            config.fx_passes_numeric_check["num_iterations"],
+            config.fx_passes_numeric_check["precision"],
+        )
 
     print_graph(gm.graph, "After recompile in pre grad pass.")
 
